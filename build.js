@@ -1,0 +1,159 @@
+#!/usr/bin/env node
+// Генератор письма о релизе фичей.
+// Запуск:  node build.js                 (берёт content.json, пишет email.html)
+//          node build.js my.json out.html (свои пути)
+
+const fs = require('fs');
+const path = require('path');
+
+const contentPath  = process.argv[2] || 'content.json';
+const outPath      = process.argv[3] || 'email.html';
+const templatePath = path.join(__dirname, 'template.html');
+
+// Порог для вшивания картинки макета в письмо.
+// Если файл больше — картинка НЕ вшивается, используется ссылка-фолбэк.
+// Многие почтовые клиенты режут крупные вшитые картинки, поэтому планка низкая.
+const MAX_INLINE_IMAGE_KB = 100;
+
+// MIME-типы по расширению файла картинки
+const IMAGE_MIME = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif', '.webp': 'image/webp'
+};
+
+// --- SVG-логотипы платформ (data-URI, не зависят от внешних серверов) ---
+const APPLE_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512" width="11" height="11"><path fill="#0b6b2f" d="M318.7 268.7c-.2-36.7 16.4-64.4 50-84.8-18.8-26.9-47.2-41.7-84.7-44.6-35.5-2.8-74.3 20.7-88.5 20.7-15 0-49.4-19.7-76.4-19.7C63.3 141.2 4 184.8 4 273.5q0 39.3 14.4 81.2c12.8 36.7 59 126.7 107.2 125.2 25.2-.6 43-17.9 75.8-17.9 31.8 0 48.3 17.9 76.4 17.9 48.6-.7 90.4-82.5 102.6-119.3-65.2-30.7-61.7-90-61.7-91.9zm-56.6-164.2c27.3-32.4 24.8-61.9 24-72.5-24.1 1.4-52 16.4-67.9 34.9-17.5 19.8-27.8 44.3-25.6 71.9 26.1 2 49.9-11.4 69.5-34.3z"/></svg>';
+const ANDROID_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512" width="12" height="12"><path fill="#0b6b2f" d="M420.55 301.93a24 24 0 1 1 24-24 24 24 0 0 1-24 24m-265.1 0a24 24 0 1 1 24-24 24 24 0 0 1-24 24m273.7-144.48 47.94-83a10 10 0 1 0-17.27-10l-48.54 84.07a301.25 301.25 0 0 0-246.56 0L116.18 64.45a10 10 0 1 0-17.27 10l47.94 83C64.53 202.22 8.24 285.55 0 384h576c-8.24-98.45-64.54-181.78-146.85-226.55"/></svg>';
+const dataUri = (svg) => 'data:image/svg+xml;base64,' + Buffer.from(svg).toString('base64');
+
+// Стили бейджей по типу платформы
+const PLATFORM_STYLE = {
+  ios:     { label: 'iOS',     fg: '#0b6b2f', bg: '#e3f6ea', icon: dataUri(APPLE_SVG),   w: 11 },
+  android: { label: 'Android', fg: '#0b6b2f', bg: '#e3f6ea', icon: dataUri(ANDROID_SVG), w: 12 },
+  back:    { label: 'Back',    fg: '#055a78', bg: '#e0f3fb', icon: null }
+};
+
+// Экранирование пользовательского текста
+const esc = (s) => String(s == null ? '' : s)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+function renderBadge(p) {
+  const style = PLATFORM_STYLE[p.type];
+  if (!style) { console.warn(`⚠  неизвестная платформа: "${p.type}" (ожидается ios/android/back)`); return ''; }
+  const iconImg = style.icon
+    ? `<img src="${style.icon}" width="${style.w}" height="${style.w}" alt="" style="vertical-align:-1px;">&nbsp;`
+    : '';
+  const ver = p.version ? `&nbsp;${esc(p.version)}` : '';
+  return `<td style="padding-right:6px; padding-bottom:6px;"><span style="display:inline-block; font-family:Arial,Helvetica,sans-serif; font-size:11px; font-weight:bold; color:${style.fg}; background-color:${style.bg}; border-radius:5px; padding:4px 9px;">${iconImg}${esc(style.label)}${ver}</span></td>`;
+}
+
+const linkStyle = 'font-family:Arial,Helvetica,sans-serif; font-size:14px; font-weight:bold; color:#21A038;';
+const mkLink = (url, label) => {
+  const u = (url == null ? '' : String(url)).trim();
+  return u ? `<a href="${esc(u)}" style="${linkStyle}">${label}&nbsp;→</a>` : '';
+};
+
+// Возвращает { image, link } для макета фичи.
+//   image — HTML с вшитой картинкой (или '' если картинки нет/она большая)
+//   link  — HTML ссылки "Макеты" (или '')
+// Правила:
+//   - есть mockup_image и файл влезает в порог → вшиваем картинку;
+//   - файла нет / он большой / формат неизвестен → картинки нет, пишем предупреждение;
+//   - mockup_url задан → всегда доступен как ссылка (в т.ч. как фолбэк).
+function renderMockup(f) {
+  const result = { image: '', link: '' };
+  const urlFallback = (f.mockup_url || f.mockups_url || '').trim(); // mockups_url — старое имя, поддержим
+  const imgPath = (f.mockup_image || '').trim();
+
+  if (imgPath) {
+    const abs = path.isAbsolute(imgPath) ? imgPath : path.join(path.dirname(contentPath), imgPath);
+    const ext = path.extname(imgPath).toLowerCase();
+    const mime = IMAGE_MIME[ext];
+
+    if (!mime) {
+      console.warn(`⚠  [${f.name}] неподдерживаемый формат картинки "${imgPath}" (нужно png/jpg/gif/webp)`);
+    } else if (!fs.existsSync(abs)) {
+      console.warn(`⚠  [${f.name}] файл макета не найден: ${abs}`);
+    } else {
+      const sizeKb = fs.statSync(abs).size / 1024;
+      if (sizeKb > MAX_INLINE_IMAGE_KB) {
+        if (urlFallback) {
+          console.warn(`⚠  [${f.name}] картинка ${Math.round(sizeKb)} КБ > ${MAX_INLINE_IMAGE_KB} КБ — не вшита, использую ссылку mockup_url`);
+        } else {
+          console.warn(`⚠  [${f.name}] картинка ${Math.round(sizeKb)} КБ > ${MAX_INLINE_IMAGE_KB} КБ — не вшита. Уменьшите файл или добавьте mockup_url`);
+        }
+      } else {
+        const b64 = fs.readFileSync(abs).toString('base64');
+        const src = `data:${mime};base64,${b64}`;
+        // Картинка кликабельна, если есть ссылка-фолбэк (открыть полный макет)
+        const img = `<img src="${src}" alt="Макет: ${esc(f.name)}" width="520" style="width:100%; max-width:520px; height:auto; border-radius:10px; border:1px solid #eceff2; display:block;">`;
+        result.image = urlFallback
+          ? `\n              <p style="margin:0 0 10px 0;"><a href="${esc(urlFallback)}" style="text-decoration:none;">${img}</a></p>`
+          : `\n              <p style="margin:0 0 10px 0;">${img}</p>`;
+      }
+    }
+  }
+
+  // Ссылка "Макеты": показываем, если картинку не вшили (нужен доступ к макету)
+  // ИЛИ если картинку вшили, но она не кликабельна не из-за ссылки — тогда ссылка уже в картинке.
+  // Правило простое: если картинки в письме нет, а ссылка есть — даём текстовую ссылку.
+  if (!result.image && urlFallback) {
+    result.link = mkLink(urlFallback, 'Макеты');
+  }
+  return result;
+}
+
+function renderFeature(f, isLast) {
+  const badges = (f.platforms || []).map(renderBadge).join('');
+  const badgeBlock = badges
+    ? `<table role="presentation" cellpadding="0" cellspacing="0" style="margin-bottom:8px;"><tr>${badges}</tr></table>`
+    : '';
+  const divider = isLast ? '' :
+    `<tr><td style="padding:24px 40px 0 40px;" class="px"><div style="border-top:1px solid #eceff2; font-size:0; line-height:0;">&nbsp;</div></td></tr>`;
+
+  // --- Макет: картинка (вшитая) и/или ссылка ---
+  const mockup = renderMockup(f);
+
+  // --- Ссылки: Аналитика + Макеты(если текстовая ссылка) ---
+  const analytics = mkLink(f.analytics_url, 'Аналитика');
+  const mockupsLink = mockup.link;
+  const sep = (analytics && mockupsLink) ? '<span style="color:#d0d5dd;">&nbsp;&nbsp;|&nbsp;&nbsp;</span>' : '';
+  const linksBlock = (analytics || mockupsLink)
+    ? `\n              <p style="margin:0;">${analytics}${sep}${mockupsLink}</p>`
+    : '';
+
+  // --- Опциональное описание ---
+  const desc = (f.description == null ? '' : String(f.description)).trim();
+  const descBlock = desc
+    ? `\n              <p style="margin:0 0 10px 0; font-family:Arial,Helvetica,sans-serif; font-size:14px; line-height:1.55; color:#6b7280;">${esc(desc)}</p>`
+    : '';
+
+  // Если под названием ничего нет — убираем нижний отступ у названия
+  const hasBody = descBlock || mockup.image || linksBlock;
+  const nameMargin = hasBody ? 'margin:0 0 6px 0;' : 'margin:0;';
+
+  return `
+          <tr>
+            <td style="padding:24px 40px 0 40px;" class="px">
+              ${badgeBlock}
+              <p style="${nameMargin} font-family:Arial,Helvetica,sans-serif; font-size:18px; font-weight:bold; line-height:1.4; color:#1f1f1f;">${esc(f.name)}</p>${descBlock}${mockup.image}${linksBlock}
+            </td>
+          </tr>${divider}`;
+}
+
+// --- сборка ---
+const data = JSON.parse(fs.readFileSync(contentPath, 'utf8'));
+const features = (data.features || []);
+if (!features.length) console.warn('⚠  в content.json нет ни одной фичи');
+
+const featuresHtml = features.map((f, i) => renderFeature(f, i === features.length - 1)).join('\n');
+
+let html = fs.readFileSync(templatePath, 'utf8')
+  .replace(/\{\{RELEASE_TITLE\}\}/g, esc(data.release_title))
+  .replace(/\{\{INTRO_TEXT\}\}/g, esc(data.intro))
+  .replace(/\{\{CONTACT\}\}/g, esc(data.contact))
+  .replace(/\{\{TEAM_NAME\}\}/g, esc(data.team))
+  .replace(/\{\{FEATURES\}\}/g, featuresHtml);
+
+fs.writeFileSync(outPath, html);
+console.log(`✓ ${outPath} собран — фичей: ${features.length}`);
