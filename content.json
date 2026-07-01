@@ -1,8 +1,6 @@
 {
   "release_title": "Релиз июня",
   "intro": "Привет! Выкатили несколько фичей в этом релизе. Ниже — что вошло, с макетами и аналитикой по каждой.",
-  "contact": "@dmitrii в Slack",
-  "team": "Команда мобильной разработки",
   "features": [
     {
       "name": "Новая лента рекомендаций",
@@ -17,22 +15,12 @@
       ]
     },
     {
-      "name": "Экран настроек VPN",
-      "description": "Большой макет — не влезает в письмо, поэтому останется ссылкой.",
-      "mockup_image": "mockups/settings-big.jpg",
-      "mockup_url": "https://figma.com/file/settings-full",
+      "name": "Обработка диплинков",
+      "description": "Поддержка новых сценариев перехода из пушей и внешних ссылок.",
+      "mockup_url": "https://figma.com/file/deeplinks",
       "platforms": [
         { "type": "ios",     "version": "1.84.0" },
         { "type": "android", "version": "1.84.1" }
-      ]
-    },
-    {
-      "name": "Сплит-тоннелинг в настройках",
-      "description": "Только текстовая ссылка на макет, картинки нет.",
-      "analytics_url": "https://example.com/analytics/split",
-      "mockup_url": "https://figma.com/file/split",
-      "platforms": [
-        { "type": "back", "version": "3.13.0" }
       ]
     },
     {
@@ -42,5 +30,12 @@
         { "type": "android", "version": "1.84.0" }
       ]
     }
-  ]
+  ],
+  "resources": [
+    { "title": "Полная таблица релиза (Confluence)", "url": "https://confluence.example.com/release-june" },
+    { "title": "Дашборд метрик", "url": "https://grafana.example.com/dashboard" },
+    { "title": "Чек-лист регресса", "url": "https://example.com/regress-checklist" }
+  ],
+  "contact": "@dmitrii в Slack",
+  "team": "Команда мобильной разработки"
 }

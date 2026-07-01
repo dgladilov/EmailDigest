@@ -148,12 +148,62 @@ if (!features.length) console.warn('⚠  в content.json нет ни одной 
 
 const featuresHtml = features.map((f, i) => renderFeature(f, i === features.length - 1)).join('\n');
 
+// --- Блок "Полезные материалы" (опциональный) ---
+// data.resources — массив ссылок: [{ "title": "...", "url": "..." }, ...]
+// Показывается только если массив непустой.
+function renderResources(resources) {
+  const items = (resources || []).filter(r => r && (r.url || '').trim());
+  if (!items.length) return '';
+  const rows = items.map(r => {
+    const title = esc((r.title || r.url || '').toString().trim());
+    const url = esc(r.url.toString().trim());
+    return `<tr><td style="padding:3px 0;"><a href="${url}" style="font-family:Arial,Helvetica,sans-serif; font-size:14px; font-weight:bold; color:#21A038; text-decoration:none;">${title}&nbsp;→</a></td></tr>`;
+  }).join('');
+  const heading = esc((data.resources_title || 'Полезные материалы').toString());
+  return `
+          <tr>
+            <td style="padding:8px 40px 0 40px;" class="px">
+              <div style="border-top:1px solid #eceff2; padding-top:20px;">
+                <p style="margin:0 0 10px 0; font-family:Arial,Helvetica,sans-serif; font-size:13px; font-weight:bold; letter-spacing:0.08em; text-transform:uppercase; color:#9aa6b2;">${heading}</p>
+                <table role="presentation" cellpadding="0" cellspacing="0">${rows}</table>
+              </div>
+            </td>
+          </tr>`;
+}
+
+// --- Подвал (опциональный) ---
+// Показывается, если задан contact и/или team. Нет обоих — подвала нет.
+function renderFooter(contact, team) {
+  const c = (contact == null ? '' : String(contact)).trim();
+  const t = (team == null ? '' : String(team)).trim();
+  if (!c && !t) return '';
+  const contactLine = c ? `Вопросы по релизу — пишите в ${esc(c)}.` : '';
+  const teamLine = t ? esc(t) : '';
+  const br = (contactLine && teamLine) ? '<br>' : '';
+  return `
+          <tr>
+            <td style="padding:24px 40px 36px 40px;" class="px">
+              <p style="margin:0; font-family:Arial,Helvetica,sans-serif; font-size:13px; line-height:1.6; color:#9aa6b2;">${contactLine}${br}${teamLine}</p>
+            </td>
+          </tr>`;
+}
+
+const resourcesHtml = renderResources(data.resources);
+const footerHtml = renderFooter(data.contact, data.team);
+
+// Нижний отступ у контейнера должен остаться, даже если подвала нет:
+// если футера нет, добавим отступ через пустую строку.
+const tailSpacer = footerHtml ? '' :
+  `\n          <tr><td style="padding:0 40px 36px 40px; font-size:0; line-height:0;" class="px">&nbsp;</td></tr>`;
+
 let html = fs.readFileSync(templatePath, 'utf8')
   .replace(/\{\{RELEASE_TITLE\}\}/g, esc(data.release_title))
   .replace(/\{\{INTRO_TEXT\}\}/g, esc(data.intro))
-  .replace(/\{\{CONTACT\}\}/g, esc(data.contact))
-  .replace(/\{\{TEAM_NAME\}\}/g, esc(data.team))
-  .replace(/\{\{FEATURES\}\}/g, featuresHtml);
+  .replace(/\{\{FEATURES\}\}/g, featuresHtml)
+  .replace(/\{\{RESOURCES\}\}/g, resourcesHtml)
+  .replace(/\{\{FOOTER\}\}/g, footerHtml + tailSpacer);
 
 fs.writeFileSync(outPath, html);
-console.log(`✓ ${outPath} собран — фичей: ${features.length}`);
+const parts = [`фичей: ${features.length}`];
+if (resourcesHtml) parts.push(`материалов: ${(data.resources || []).filter(r => r && (r.url||'').trim()).length}`);
+console.log(`✓ ${outPath} собран — ${parts.join(', ')}`);
