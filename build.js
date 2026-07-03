@@ -2,6 +2,10 @@
 // Генератор письма о релизе фичей.
 // Запуск:  node build.js                 (берёт content.json, пишет email.html)
 //          node build.js my.json out.html (свои пути)
+//
+// Режимы картинок (поле "image_mode" в content.json):
+//   "inline" (по умолч.) — картинки вшиваются в HTML через data-URI → email.html
+//   "cid"                — картинки идут вложениями (Content-ID)     → email.html + email.eml
 
 const fs = require('fs');
 const path = require('path');
@@ -10,10 +14,26 @@ const contentPath  = process.argv[2] || 'content.json';
 const outPath      = process.argv[3] || 'email.html';
 const templatePath = path.join(__dirname, 'template.html');
 
-// Порог для вшивания картинки макета в письмо.
-// Если файл больше — картинка НЕ вшивается, используется ссылка-фолбэк.
-// Многие почтовые клиенты режут крупные вшитые картинки, поэтому планка низкая.
-const MAX_INLINE_IMAGE_KB = 100;
+// Данные читаем сразу — настройки ниже зависят от них
+const data = JSON.parse(fs.readFileSync(contentPath, 'utf8'));
+
+// Порог размера картинки макета.
+// Если файл больше — картинка НЕ добавляется, используется ссылка-фолбэк.
+// По умолчанию 1.5 МБ; настраивается полем "max_inline_image_kb" в content.json.
+const DEFAULT_MAX_IMAGE_KB = 1536; // 1.5 МБ
+const maxImageKb = Number(data.max_inline_image_kb) > 0
+  ? Number(data.max_inline_image_kb)
+  : DEFAULT_MAX_IMAGE_KB;
+
+// Режим подключения картинок: "inline" (data-URI) или "cid" (вложения)
+const imageMode = (data.image_mode || 'inline').toLowerCase();
+if (!['inline', 'cid'].includes(imageMode)) {
+  console.error(`✗ неизвестный image_mode: "${data.image_mode}" (ожидается "inline" или "cid")`);
+  process.exit(1);
+}
+
+// Собранные CID-вложения: { cid, filename, mime, buffer }
+const cidAttachments = [];
 
 // MIME-типы по расширению файла картинки
 const IMAGE_MIME = {
@@ -54,13 +74,14 @@ const mkLink = (url, label) => {
 };
 
 // Возвращает { image, link } для макета фичи.
-//   image — HTML с вшитой картинкой (или '' если картинки нет/она большая)
+//   image — HTML с картинкой (data-URI или cid:, по режиму) или ''
 //   link  — HTML ссылки "Макеты" (или '')
 // Правила:
-//   - есть mockup_image и файл влезает в порог → вшиваем картинку;
-//   - файла нет / он большой / формат неизвестен → картинки нет, пишем предупреждение;
+//   - есть mockup_image, файл найден и влезает в порог → картинка в письме
+//     (inline: вшита через data-URI; cid: вложение + ссылка cid: в HTML);
+//   - файла нет / он большой / формат неизвестен → картинки нет, предупреждение;
 //   - mockup_url задан → всегда доступен как ссылка (в т.ч. как фолбэк).
-function renderMockup(f) {
+function renderMockup(f, featureIndex) {
   const result = { image: '', link: '' };
   const urlFallback = (f.mockup_url || f.mockups_url || '').trim(); // mockups_url — старое имя, поддержим
   const imgPath = (f.mockup_image || '').trim();
@@ -76,15 +97,25 @@ function renderMockup(f) {
       console.warn(`⚠  [${f.name}] файл макета не найден: ${abs}`);
     } else {
       const sizeKb = fs.statSync(abs).size / 1024;
-      if (sizeKb > MAX_INLINE_IMAGE_KB) {
-        if (urlFallback) {
-          console.warn(`⚠  [${f.name}] картинка ${Math.round(sizeKb)} КБ > ${MAX_INLINE_IMAGE_KB} КБ — не вшита, использую ссылку mockup_url`);
-        } else {
-          console.warn(`⚠  [${f.name}] картинка ${Math.round(sizeKb)} КБ > ${MAX_INLINE_IMAGE_KB} КБ — не вшита. Уменьшите файл или добавьте mockup_url`);
-        }
+      if (sizeKb > maxImageKb) {
+        const hint = urlFallback ? 'использую ссылку mockup_url' : 'уменьшите файл или добавьте mockup_url';
+        console.warn(`⚠  [${f.name}] картинка ${Math.round(sizeKb)} КБ > ${maxImageKb} КБ — не добавлена, ${hint}`);
       } else {
-        const b64 = fs.readFileSync(abs).toString('base64');
-        const src = `data:${mime};base64,${b64}`;
+        let src;
+        if (imageMode === 'cid') {
+          // Вложение с Content-ID: в HTML идёт ссылка cid:, файл — в email.eml
+          const cid = `mockup${featureIndex + 1}@release`;
+          cidAttachments.push({
+            cid,
+            filename: path.basename(abs),
+            mime,
+            buffer: fs.readFileSync(abs)
+          });
+          src = `cid:${cid}`;
+        } else {
+          const b64 = fs.readFileSync(abs).toString('base64');
+          src = `data:${mime};base64,${b64}`;
+        }
         // Картинка кликабельна, если есть ссылка-фолбэк (открыть полный макет)
         const img = `<img src="${src}" alt="Макет: ${esc(f.name)}" width="520" style="width:100%; max-width:520px; height:auto; border-radius:10px; border:1px solid #eceff2; display:block;">`;
         result.image = urlFallback
@@ -94,16 +125,14 @@ function renderMockup(f) {
     }
   }
 
-  // Ссылка "Макеты": показываем, если картинку не вшили (нужен доступ к макету)
-  // ИЛИ если картинку вшили, но она не кликабельна не из-за ссылки — тогда ссылка уже в картинке.
-  // Правило простое: если картинки в письме нет, а ссылка есть — даём текстовую ссылку.
+  // Если картинки в письме нет, а ссылка есть — даём текстовую ссылку "Макеты"
   if (!result.image && urlFallback) {
     result.link = mkLink(urlFallback, 'Макеты');
   }
   return result;
 }
 
-function renderFeature(f, isLast) {
+function renderFeature(f, index, isLast) {
   const badges = (f.platforms || []).map(renderBadge).join('');
   const badgeBlock = badges
     ? `<table role="presentation" cellpadding="0" cellspacing="0" style="margin-bottom:8px;"><tr>${badges}</tr></table>`
@@ -112,7 +141,7 @@ function renderFeature(f, isLast) {
     `<tr><td style="padding:24px 40px 0 40px;" class="px"><div style="border-top:1px solid #eceff2; font-size:0; line-height:0;">&nbsp;</div></td></tr>`;
 
   // --- Макет: картинка (вшитая) и/или ссылка ---
-  const mockup = renderMockup(f);
+  const mockup = renderMockup(f, index);
 
   // --- Ссылки: Аналитика + Макеты(если текстовая ссылка) ---
   const analytics = mkLink(f.analytics_url, 'Аналитика');
@@ -142,11 +171,10 @@ function renderFeature(f, isLast) {
 }
 
 // --- сборка ---
-const data = JSON.parse(fs.readFileSync(contentPath, 'utf8'));
 const features = (data.features || []);
 if (!features.length) console.warn('⚠  в content.json нет ни одной фичи');
 
-const featuresHtml = features.map((f, i) => renderFeature(f, i === features.length - 1)).join('\n');
+const featuresHtml = features.map((f, i) => renderFeature(f, i, i === features.length - 1)).join('\n');
 
 // --- Блок "Полезные материалы" (опциональный) ---
 // data.resources — массив ссылок: [{ "title": "...", "url": "..." }, ...]
@@ -207,3 +235,46 @@ fs.writeFileSync(outPath, html);
 const parts = [`фичей: ${features.length}`];
 if (resourcesHtml) parts.push(`материалов: ${(data.resources || []).filter(r => r && (r.url||'').trim()).length}`);
 console.log(`✓ ${outPath} собран — ${parts.join(', ')}`);
+
+// --- CID-режим: собираем полноценное письмо email.eml (MIME multipart/related) ---
+// .eml можно открыть в Outlook / Apple Mail / Thunderbird и отправить как есть,
+// либо скормить SMTP-инструменту. Картинки лежат внутри как вложения с Content-ID.
+if (imageMode === 'cid') {
+  const emlPath = outPath.replace(/\.html?$/i, '') + '.eml';
+
+  // Тема письма в UTF-8 (RFC 2047 encoded-word)
+  const subject = `=?UTF-8?B?${Buffer.from(String(data.release_title || 'Release')).toString('base64')}?=`;
+
+  // base64 с переносом строк по 76 символов (требование MIME)
+  const b64wrap = (buf) => buf.toString('base64').replace(/(.{76})/g, '$1\r\n');
+
+  const boundary = 'RELEASE-EMAIL-BOUNDARY';
+  const lines = [];
+  lines.push('Subject: ' + subject);
+  lines.push('MIME-Version: 1.0');
+  lines.push(`Content-Type: multipart/related; boundary="${boundary}"; type="text/html"`);
+  lines.push('');
+  lines.push('--' + boundary);
+  lines.push('Content-Type: text/html; charset=utf-8');
+  lines.push('Content-Transfer-Encoding: base64');
+  lines.push('');
+  lines.push(b64wrap(Buffer.from(html, 'utf8')));
+
+  for (const att of cidAttachments) {
+    lines.push('--' + boundary);
+    lines.push(`Content-Type: ${att.mime}; name="${att.filename}"`);
+    lines.push('Content-Transfer-Encoding: base64');
+    lines.push(`Content-ID: <${att.cid}>`);
+    lines.push(`Content-Disposition: inline; filename="${att.filename}"`);
+    lines.push('');
+    lines.push(b64wrap(att.buffer));
+  }
+  lines.push('--' + boundary + '--');
+  lines.push('');
+
+  fs.writeFileSync(emlPath, lines.join('\r\n'));
+  console.log(`✓ ${emlPath} собран — вложений: ${cidAttachments.length} (режим cid)`);
+  if (!cidAttachments.length) {
+    console.warn('⚠  режим cid включён, но ни одной картинки не добавлено — .eml собран без вложений');
+  }
+}
