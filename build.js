@@ -17,18 +17,30 @@ const templatePath = path.join(__dirname, 'template.html');
 // Данные читаем сразу — настройки ниже зависят от них
 const data = JSON.parse(fs.readFileSync(contentPath, 'utf8'));
 
+// --- Настройки письма: объект "config" в content.json ---
+//   "config": {
+//     "image_mode": "inline" | "cid",     // по умолч. "inline"
+//     "max_inline_image_kb": 1536         // по умолч. 1536 (1.5 МБ)
+//   }
+// Для обратной совместимости эти же поля читаются и с верхнего уровня,
+// но приоритет — у config.
+const config = (data.config && typeof data.config === 'object') ? data.config : {};
+const pick = (key) => config[key] !== undefined ? config[key] : data[key];
+if (data.image_mode !== undefined || data.max_inline_image_kb !== undefined) {
+  console.warn('⚠  image_mode / max_inline_image_kb на верхнем уровне устарели — перенесите их в объект "config"');
+}
+
 // Порог размера картинки макета.
 // Если файл больше — картинка НЕ добавляется, используется ссылка-фолбэк.
-// По умолчанию 1.5 МБ; настраивается полем "max_inline_image_kb" в content.json.
 const DEFAULT_MAX_IMAGE_KB = 1536; // 1.5 МБ
-const maxImageKb = Number(data.max_inline_image_kb) > 0
-  ? Number(data.max_inline_image_kb)
+const maxImageKb = Number(pick('max_inline_image_kb')) > 0
+  ? Number(pick('max_inline_image_kb'))
   : DEFAULT_MAX_IMAGE_KB;
 
 // Режим подключения картинок: "inline" (data-URI) или "cid" (вложения)
-const imageMode = (data.image_mode || 'inline').toLowerCase();
+const imageMode = (pick('image_mode') || 'inline').toLowerCase();
 if (!['inline', 'cid'].includes(imageMode)) {
-  console.error(`✗ неизвестный image_mode: "${data.image_mode}" (ожидается "inline" или "cid")`);
+  console.error(`✗ неизвестный image_mode: "${pick('image_mode')}" (ожидается "inline" или "cid")`);
   process.exit(1);
 }
 
@@ -109,7 +121,8 @@ function renderMockup(f, featureIndex) {
             cid,
             filename: path.basename(abs),
             mime,
-            buffer: fs.readFileSync(abs)
+            buffer: fs.readFileSync(abs),
+            sourcePath: path.resolve(abs)
           });
           src = `cid:${cid}`;
         } else {
@@ -250,6 +263,7 @@ if (imageMode === 'cid') {
 
   const boundary = 'RELEASE-EMAIL-BOUNDARY';
   const lines = [];
+  lines.push('X-Unsent: 1'); // Outlook откроет .eml как неотправленный черновик с кнопкой "Отправить"
   lines.push('Subject: ' + subject);
   lines.push('MIME-Version: 1.0');
   lines.push(`Content-Type: multipart/related; boundary="${boundary}"; type="text/html"`);
@@ -277,4 +291,18 @@ if (imageMode === 'cid') {
   if (!cidAttachments.length) {
     console.warn('⚠  режим cid включён, но ни одной картинки не добавлено — .eml собран без вложений');
   }
+
+  // Манифест вложений для send.js: какие файлы прикладывать и с какими cid
+  const manifestPath = outPath.replace(/\.html?$/i, '') + '.attachments.json';
+  const manifest = {
+    subject: String(data.release_title || 'Release'),
+    html: path.resolve(outPath),
+    attachments: cidAttachments.map(a => ({
+      cid: a.cid,
+      filename: a.filename,
+      path: a.sourcePath
+    }))
+  };
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+  console.log(`✓ ${manifestPath} — манифест для send.js`);
 }

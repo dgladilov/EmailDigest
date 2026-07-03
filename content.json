@@ -1,6 +1,10 @@
 {
   "release_title": "Релиз июня",
   "intro": "Привет! Выкатили несколько фичей в этом релизе. Ниже — что вошло, с макетами и аналитикой по каждой.",
+  "config": {
+    "image_mode": "inline",
+    "max_inline_image_kb": 1536
+  },
   "features": [
     {
       "name": "Новая лента рекомендаций",
@@ -9,9 +13,18 @@
       "mockup_image": "mockups/feed.png",
       "mockup_url": "https://figma.com/file/feed-full",
       "platforms": [
-        { "type": "ios",     "version": "1.84.0" },
-        { "type": "android", "version": "1.84.0" },
-        { "type": "back",    "version": "3.12.0" }
+        {
+          "type": "ios",
+          "version": "1.84.0"
+        },
+        {
+          "type": "android",
+          "version": "1.84.0"
+        },
+        {
+          "type": "back",
+          "version": "3.12.0"
+        }
       ]
     },
     {
@@ -19,22 +32,43 @@
       "description": "Поддержка новых сценариев перехода из пушей и внешних ссылок.",
       "mockup_url": "https://figma.com/file/deeplinks",
       "platforms": [
-        { "type": "ios",     "version": "1.84.0" },
-        { "type": "android", "version": "1.84.1" }
+        {
+          "type": "ios",
+          "version": "1.84.0"
+        },
+        {
+          "type": "android",
+          "version": "1.84.1"
+        }
       ]
     },
     {
       "name": "Мелкие правки и стабилизация",
       "platforms": [
-        { "type": "ios",     "version": "1.84.0" },
-        { "type": "android", "version": "1.84.0" }
+        {
+          "type": "ios",
+          "version": "1.84.0"
+        },
+        {
+          "type": "android",
+          "version": "1.84.0"
+        }
       ]
     }
   ],
   "resources": [
-    { "title": "Полная таблица релиза (Confluence)", "url": "https://confluence.example.com/release-june" },
-    { "title": "Дашборд метрик", "url": "https://grafana.example.com/dashboard" },
-    { "title": "Чек-лист регресса", "url": "https://example.com/regress-checklist" }
+    {
+      "title": "Полная таблица релиза (Confluence)",
+      "url": "https://confluence.example.com/release-june"
+    },
+    {
+      "title": "Дашборд метрик",
+      "url": "https://grafana.example.com/dashboard"
+    },
+    {
+      "title": "Чек-лист регресса",
+      "url": "https://example.com/regress-checklist"
+    }
   ],
   "contact": "@dmitrii в Slack",
   "team": "Команда мобильной разработки"
